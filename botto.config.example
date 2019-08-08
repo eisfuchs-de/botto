@@ -1,0 +1,18 @@
+# Rename this to botto.config and fill in your values
+
+[General]
+use_rocket = True
+use_irc = True
+
+[IRC]
+server = IRC_SERVER_HERE
+port = IRC_SSL_PORT_HERE
+channel = #botto
+nick = Botto
+admin_name = YOUR_ADMIN_NICK_HERE
+
+[Rocket]
+server = YOUR_ROCKET_CHAT_SERVER_HERE
+channel = botto
+nick = YOUR_BOT_NICK_HERE
+password = YOUR_BOT_PASSWORD_HERE
