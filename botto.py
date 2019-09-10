@@ -1,7 +1,41 @@
 #!/usr/bin/python3
 
-# To install the rocket chat library, use:
-# pip install rocket-python
+# Copyright 2019 Dario Abatianni
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as published by
+# the Free Software Foundation; version 2.1.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Author: Dario Abatianni <dabatianni@suse.de>
+#
+# ----------------------------------------------------------------------------
+
+'''
+Dependencies:
+
+pip install rocket-python
+pip install python3-ws4py
+pip install python3-pyee
+
+These are not available in SUSE packages, so copy them from github and put
+them in the same folder for the time being:
+
+DDPClient.py - from 
+https://github.com/hharnisc/python-ddp - 
+hharnisc@gmail.com - MIT License
+
+ejson.py - from 
+
+https://github.com/lyschoening/meteor-ejson-python - lars@lyschoening.de - MIT License
+'''
 
 import socket
 import ssl
@@ -10,9 +44,10 @@ import urllib3
 import threading
 
 from lxml import etree
-from rocketchat.api import RocketChatAPI
 
 import configparser
+
+import rocket_listener
 
 use_irc = False
 use_rocket = False
@@ -23,9 +58,9 @@ config.read("botto.config")
 
 if config["General"]["use_rocket"] == "True":
 	use_rocket = True
-	rocket_server = "https://"+config["Rocket"]["server"]
-	rocket_channel = config["Rocket"]["channel"]
-	rocket_nick = config["Rocket"]["nick"]
+	rocket_server = config["Rocket"]["server"]
+	rocket_room = config["Rocket"]["room"]
+	rocket_username = config["Rocket"]["username"]
 	rocket_pass = config["Rocket"]["password"]
 	rocket_adminname = config["Rocket"]["admin_name"]
 
@@ -38,12 +73,19 @@ if config["General"]["use_irc"] == "True":
 	irc_adminname = config["IRC"]["admin_name"]
 	exitcode = "logout " + irc_nick
 
-# very simple IRC functinoality to get us going
+# ---------------------------------- Start IRC ------------------------------------------
+
+# very simple IRC functinoality to get us going - convert this into a class and its own module later
 def irc_thread(server, port):
 	raw_ircmsg = ""
 	authenticated = False
 	channel_joined = False
 
+	# for ssl connections to external websites
+	pool_manager = urllib3.PoolManager(cert_reqs='CERT_REQUIRED', ca_certs=certifi.where())
+
+	# create an ssl socket for IRC
+	socket = ssl.wrap_socket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
 	socket.connect((server, port))
 
 	while True:
@@ -182,47 +224,33 @@ def send(command, silent=False):
 def join_channel(name):
 	send("JOIN "+ name + "\n")
 
+# ---------------------------------- End IRC --------------------------------------------
+
 def sendmsg(message):
 	if use_irc:
 		print("[" + irc_channel + "] "+ irc_nick +": " + message)
 		send("PRIVMSG "+ irc_channel +" :"+ message +"\n", True)
 
 	if use_rocket:
-		rocket_api.send_message(message, rocket_channel_id)
+		rocket.send_message(message)
 
-# do more useful things here once tha main functionality works
+# do more useful things here once the main functionality works
 def main():
 	if use_irc:
 		irc_thread.join()
 
-# global, so we can use "socket" in send()
-socket
-
+	# basically endless loop until you press enter
+	input()
 
 # only one server/channel for the moment, think about multiple connections later
 if use_irc:
-	socket = ssl.wrap_socket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
 	irc_thread = threading.Thread(target=irc_thread, args=(irc_server,irc_port))
 	irc_thread.start()
 
-
-# only one server/channel for the moment, think about multiple connections later
+# only one server/room for the moment, think about multiple connections later
 if use_rocket:
-	rocket_pass=rocket_pass.replace("%","%%")
-	print(rocket_pass)
+	rocket=rocket_listener.Rocket()
+	rocket.connect_to_server(rocket_server,443,rocket_username,rocket_pass,rocket_room);
 
-	rocket_api =RocketChatAPI(
-		settings=
-		{
-			"username": rocket_nick, "password": rocket_pass, "domain": rocket_server
-		})
-
-
-	rocket_channel_id = rocket_api.get_room_id(rocket_channel)
-	print(rocket_channel_id)
-
-	rocket_api.send_message("Botto running! Waiting for command.", rocket_channel_id)
-
-pool_manager = urllib3.PoolManager(cert_reqs='CERT_REQUIRED', ca_certs=certifi.where())
-
+# main loop - do something useful once the core functionality works
 main()
