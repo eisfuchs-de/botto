@@ -28,13 +28,8 @@ pip install python3-pyee
 These are not available in SUSE packages, so copy them from github and put
 them in the same folder for the time being:
 
-DDPClient.py - from 
-https://github.com/hharnisc/python-ddp - 
-hharnisc@gmail.com - MIT License
-
-ejson.py - from 
-
-https://github.com/lyschoening/meteor-ejson-python - lars@lyschoening.de - MIT License
+DDPClient.py - from https://github.com/hharnisc/python-ddp - hharnisc@gmail.com - MIT License
+ejson.py - from  https://github.com/lyschoening/meteor-ejson-python - lars@lyschoening.de - MIT License
 '''
 
 import socket
