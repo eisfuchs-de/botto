@@ -13,6 +13,6 @@ admin_name = YOUR_ADMIN_NICK_HERE
 
 [Rocket]
 server = YOUR_ROCKET_CHAT_SERVER_HERE
-channel = botto
-nick = YOUR_BOT_NICK_HERE
+room = botto
+username = YOUR_BOT_NICK_HERE
 password = YOUR_BOT_PASSWORD_HERE
