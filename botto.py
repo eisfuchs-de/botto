@@ -28,17 +28,25 @@ pip install python3-pyee
 These are not available in SUSE packages, so copy them from github and put
 them in the same folder for the time being:
 
-DDPClient.py - from https://github.com/hharnisc/python-ddp - hharnisc@gmail.com - MIT License
-ejson.py - from  https://github.com/lyschoening/meteor-ejson-python - lars@lyschoening.de - MIT License
+DDPClient.py - from
+https://github.com/hharnisc/python-ddp -
+hharnisc@gmail.com - MIT License
+
+ejson.py - from
+
+https://github.com/lyschoening/meteor-ejson-python - lars@lyschoening.de - MIT License
 '''
 
 import socket
 import ssl
 import certifi
 import urllib3
-import threading
+import threading # for IRC
 
-from lxml import etree
+import sched # for regular interval website scraping
+import time
+
+import html_parser
 
 import configparser
 
@@ -75,9 +83,6 @@ def irc_thread(server, port):
 	raw_ircmsg = ""
 	authenticated = False
 	channel_joined = False
-
-	# for ssl connections to external websites
-	pool_manager = urllib3.PoolManager(cert_reqs='CERT_REQUIRED', ca_certs=certifi.where())
 
 	# create an ssl socket for IRC
 	socket = ssl.wrap_socket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
@@ -173,7 +178,7 @@ def irc_thread(server, port):
 			elif message_type == "042":
 				print("[ID] " + " " + protocol[3] + " " + data)
 
-			# RPL_LUSERCLIENT, RPL_LUSERME, RPL_LOCALUSERS, RPL_GLOBALUSERS 
+			# RPL_LUSERCLIENT, RPL_LUSERME, RPL_LOCALUSERS, RPL_GLOBALUSERS
 			elif message_type in ["251", "255", "265", "266"]:
 				print("[Users] " + data)
 
@@ -221,6 +226,22 @@ def join_channel(name):
 
 # ---------------------------------- End IRC --------------------------------------------
 
+def scrape(sc):
+	# for ssl connections to external websites
+	pool_manager = urllib3.PoolManager(cert_reqs='CERT_REQUIRED', ca_certs=certifi.where())
+
+	request = pool_manager.request("GET", "https://maintenance.suse.de/overview/testing.html")
+
+	print(request.status) # Status code.
+	print(request.headers["Content-Type"]) # Content type.
+
+	data = request.data.decode("utf-8") # Response text.
+
+	parser = html_parser.htmlParser()
+	parser.feed(data)
+	print(parser.incident_list)
+	scheduler.enter(600, 1, scrape, (sc,))	#	schedule next scrape for 10 minutes from now TODO: (make it configurable)
+
 def sendmsg(message):
 	if use_irc:
 		print("[" + irc_channel + "] "+ irc_nick +": " + message)
@@ -246,6 +267,12 @@ if use_irc:
 if use_rocket:
 	rocket=rocket_listener.Rocket()
 	rocket.connect_to_server(rocket_server,443,rocket_username,rocket_pass,rocket_room);
+
+scheduler = sched.scheduler(time.time, time.sleep)
+
+# run first scrape 2 seconds after now
+scheduler.enter(2, 1, scrape, (scheduler,))
+scheduler.run()
 
 # main loop - do something useful once the core functionality works
 main()
