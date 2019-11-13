@@ -16,3 +16,4 @@ server = YOUR_ROCKET_CHAT_SERVER_HERE
 room = botto
 username = YOUR_BOT_NICK_HERE
 password = YOUR_BOT_PASSWORD_HERE
+admin_name = ADMIN_HANDLE_HERE
