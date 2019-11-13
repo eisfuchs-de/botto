@@ -22,8 +22,8 @@
 Dependencies:
 
 pip install rocket-python
-pip install python3-ws4py
-pip install python3-pyee
+pip install python-ws4py
+pip install python-pyee
 
 These are not available in SUSE packages, so copy them from github and put
 them in the same folder for the time being:
@@ -41,10 +41,10 @@ import socket
 import ssl
 import certifi
 import urllib3
-import threading # for IRC
-
-import sched # for regular interval website scraping
+import threading
 import time
+
+import ast
 
 import html_parser
 
@@ -76,20 +76,25 @@ if config["General"]["use_irc"] == "True":
 	irc_adminname = config["IRC"]["admin_name"]
 	exitcode = "logout " + irc_nick
 
+interval = int(config["General"]["interval"])
+if interval == 0:
+	interval = 60
+
 # ---------------------------------- Start IRC ------------------------------------------
 
 # very simple IRC functinoality to get us going - convert this into a class and its own module later
-def irc_thread(server, port):
+def irc(server, port):
 	raw_ircmsg = ""
 	authenticated = False
 	channel_joined = False
 
 	# create an ssl socket for IRC
-	socket = ssl.wrap_socket(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
-	socket.connect((server, port))
+	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	irc_socket = ssl.wrap_socket(s)
+	irc_socket.connect((server, port))
 
 	while True:
-		received = socket.recv(2048).decode("UTF-8").replace("\r","");
+		received = irc_socket.recv(2048).decode("UTF-8").replace("\r","");
 		# print("[Raw] " + received)
 
 		raw_ircmsg += received
@@ -133,8 +138,8 @@ def irc_thread(server, port):
 
 					if not authenticated:
 						authenticated = True
-						send("USER "+ irc_nick + " " + irc_nick + " " + irc_nick + " " + irc_nick + "\n")
-						send("NICK "+ irc_nick + "\n")
+						send(irc_socket, "USER "+ irc_nick + " " + irc_nick + " " + irc_nick + " " + irc_nick + "\n")
+						send(irc_socket, "NICK "+ irc_nick + "\n")
 				else:
 					print("[Notice] " + data)
 
@@ -149,7 +154,7 @@ def irc_thread(server, port):
 				if sender.lower() == irc_adminname.lower() and message_target == irc_channel:
 					if message.lower().rstrip() == exitcode.lower():
 						sendmsg("Logging out.")
-						send("QUIT \n")
+						send(irc_socket, "QUIT \n")
 						return
 					elif message.lower() == "fetch":
 						request = pool_manager.request("GET", "https://maintenance.suse.de/overview/testing.html")
@@ -185,7 +190,7 @@ def irc_thread(server, port):
 				# if we came this far we can request to join channels
 				if not channel_joined:
 					channel_joined = True
-					join_channel(irc_channel)
+					join_channel(irc_socket, irc_channel)
 
 			# RPL_LUSEROP, RPL_LUSERUNKNOWN, RPL_LUSERCHANNELS
 			elif message_type in ["252", "253", "254"]:
@@ -210,37 +215,21 @@ def irc_thread(server, port):
 				print("[Join] " + sender + " joined channel " + data)
 
 			elif message_type == "ping":
-				send("PONG :" + data + "\n")
+				send(irc_socket, "PONG :" + data + "\n")
 
 			else:
 				print(ircmsg)
 				print(protocol)
 
-def send(command, silent=False):
+def send(s, command, silent=False):
 	if not silent:
 		print("=> " + command.strip("\n"))
-	socket.send(bytes(command, "UTF-8"))
+	s.send(bytes(command, "UTF-8"))
 
-def join_channel(name):
-	send("JOIN "+ name + "\n")
+def join_channel(s, name):
+	send(s, "JOIN "+ name + "\n")
 
 # ---------------------------------- End IRC --------------------------------------------
-
-def scrape(sc):
-	# for ssl connections to external websites
-	pool_manager = urllib3.PoolManager(cert_reqs='CERT_REQUIRED', ca_certs=certifi.where())
-
-	request = pool_manager.request("GET", "https://maintenance.suse.de/overview/testing.html")
-
-	print(request.status) # Status code.
-	print(request.headers["Content-Type"]) # Content type.
-
-	data = request.data.decode("utf-8") # Response text.
-
-	parser = html_parser.htmlParser()
-	parser.feed(data)
-	print(parser.incident_list)
-	scheduler.enter(600, 1, scrape, (sc,))	#	schedule next scrape for 10 minutes from now TODO: (make it configurable)
 
 def sendmsg(message):
 	if use_irc:
@@ -250,29 +239,111 @@ def sendmsg(message):
 	if use_rocket:
 		rocket.send_message(message)
 
+class Scraper(threading.Thread):
+	def __init__(self, event):
+		threading.Thread.__init__(self)
+		self.stopped = event
+
+	def run(self):
+		while not self.stopped.wait(interval):
+			# for ssl connections to external websites
+			# we trust our own website to be genuine, so set CERT_NONE
+			pool_manager = urllib3.PoolManager(cert_reqs='CERT_NONE', ca_certs=certifi.where())
+			# don't complain in the logs about insecure requests, please
+			urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+			request = pool_manager.request("GET", "https://maintenance.suse.de/overview/testing.html")
+
+			# parse website only if it was loaded correctly
+			if request.status == 200:
+				# print(request.headers["Content-Type"]) # Content type.
+				data = request.data.decode("utf-8") # Response text.
+
+				print("Checking incidents ...")
+
+				parser = html_parser.htmlParser()
+				parser.feed(data)
+
+				new_incidents = []
+				assigned_incidents = []
+				for incident in parser.incident_list:
+					if not incident in known_incidents:
+						if parser.incident_list[incident].find('[qam-sle]') != -1:
+							new_incidents.append(repr(incident))
+							known_incidents[incident] = '[qam-sle]'
+					elif known_incidents[incident] == '[qam-sle]':
+						if parser.incident_list[incident].find('[qam-sle]') == -1:
+							known_incidents[incident] = parser.incident_list[incident]
+							assigned_incidents.append(repr(incident) + " => " + parser.incident_list[incident])
+
+				if len(new_incidents):
+					sendmsg("New incidents: " + repr(new_incidents))
+
+				if len(assigned_incidents):
+					sendmsg("Assigned incidents: " + repr(assigned_incidents))
+
+				lost_incidents = []
+				for incident in known_incidents:
+					if not incident in parser.incident_list:
+						print("Lost incident: "+repr(incident))
+
+						# remember this incident was lost
+						lost_incidents.append(incident)
+
+				if len(lost_incidents):
+					# remove the incidents from known incidents
+					sendmsg("Lost incidents: "+repr(lost_incidents))
+					for i in lost_incidents:
+						del known_incidents[i]
+
+				f = open("incidents.txt", "w")
+				f.write(repr(known_incidents))
+				f.close()
+			else:
+				print("Loading website failed: " + str(request.status))
+
 # do more useful things here once the main functionality works
 def main():
-	if use_irc:
-		irc_thread.join()
+	stopFlag = threading.Event()
+	scraper_thread = Scraper(stopFlag)
+	scraper_thread.start()
+
+	#scrape_timer = threading.Timer(interval, scrape)
+	#scrape()
+
+	sendmsg("Running!")
 
 	# basically endless loop until you press enter
 	input()
 
+	sendmsg("Exited!")
+
+	# this will stop the timer
+	stopFlag.set()
+	# scrape_timer.cancel()
+
 # only one server/channel for the moment, think about multiple connections later
 if use_irc:
-	irc_thread = threading.Thread(target=irc_thread, args=(irc_server,irc_port))
+	irc_thread = threading.Thread(target=irc, args=(irc_server,irc_port))
 	irc_thread.start()
 
 # only one server/room for the moment, think about multiple connections later
 if use_rocket:
-	rocket=rocket_listener.Rocket()
-	rocket.connect_to_server(rocket_server,443,rocket_username,rocket_pass,rocket_room);
+	rocket = rocket_listener.Rocket()
+	rocket.connect_to_server(rocket_server, 443, rocket_username, rocket_pass, rocket_room);
 
-scheduler = sched.scheduler(time.time, time.sleep)
+known_incidents = {}
 
-# run first scrape 2 seconds after now
-scheduler.enter(2, 1, scrape, (scheduler,))
-scheduler.run()
+try:
+	f = open('incidents.txt')
+	print("Loading incident database.")
+	known_incidents = ast.literal_eval(f.read())
+	f.close()
+except FileNotFoundError:
+	print("Creating new incident database.")
+	f = open("incidents.txt", "w")
+	f.write(repr({}))
+	f.close()
 
 # main loop - do something useful once the core functionality works
 main()
