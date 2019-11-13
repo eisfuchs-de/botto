@@ -30,6 +30,7 @@ class Rocket():
 
 	# pre declare variables to be able to use them anywhere without error messages
 	client: DDPClient
+	rocket_api: RocketChatAPI
 	room_name=''
 	room_id=''
 	sub_id=0
@@ -38,8 +39,8 @@ class Rocket():
 	username=''
 	pass_hash=''
 
-	def send_message(msg):
-		rocket_api.send_message(message)
+	def send_message(self, message):
+		self.rocket_api.send_message(message, self.room_id)
 
 	# ---------------- callbacks for the realtime API ---------------------
 
@@ -66,7 +67,7 @@ class Rocket():
 	def closed(self, code, reason):
 		print('* CONNECTION CLOSED {} {}'.format(code, reason)
 )
-	
+
 	def failed(self, collection, data):
 		print('* FAILED - data: {}'.format(str(data))
 )
@@ -96,7 +97,7 @@ class Rocket():
 			if username != self.username:
 				print("##############################")
 				print(username+" said: "+fields["args"][0]["msg"])
-				rocket_api.send_message(username+" said: "+fields["args"][0]["msg"], rocket_room_id)
+				self.rocket_api.send_message(username+" said: "+fields["args"][0]["msg"], rocket_room_id)
 				print("##############################")
 
 	def added(self, collection, id, fields):
@@ -130,7 +131,7 @@ class Rocket():
 		self.pass_hash=hashlib.sha256(rocket_pass).hexdigest()
 
 		# connect to REST API for sending messages
-		rocket_api = RocketChatAPI(
+		self.rocket_api = RocketChatAPI(
 			settings =
 			{
 				"username": self.username, "password": rocket_pass, "domain": "https://"+self.server
@@ -141,7 +142,7 @@ class Rocket():
 		rocket_pass='*********************************'
 
 		# get the room ID so we can subscribe to its stream in one of the event handlers
-		self.room_id = rocket_api.get_room_id(self.room_name)
+		self.room_id = self.rocket_api.get_room_id(self.room_name)
 
 		self.client = DDPClient('wss://'+self.server+':'+str(self.port)+'/websocket', True, 10.0, True)
 
@@ -161,7 +162,7 @@ class Rocket():
 		self.client.connect()
 
 		# announce that we're running (disabled for testing, it gets annoying)
-		# rocket_api.send_message("Botto running! Waiting for command.", self.room_id)
+		# self.rocket_api.send_message("Botto running! Waiting for command.", self.room_id)
 
 	def disconnect(self):
 		self.client.unsubscribe(sub_id)
