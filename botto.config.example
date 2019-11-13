@@ -3,6 +3,7 @@
 [General]
 use_rocket = True
 use_irc = True
+interval = SECONDS_BETWEEN_WEBSITE_POLLS
 
 [IRC]
 server = IRC_SERVER_HERE
