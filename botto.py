@@ -43,10 +43,16 @@ import certifi
 import urllib3
 import threading
 import time
+import datetime
 
+# use Abstract Syntax Trees module to parse the saved incidents file
 import ast
 
-import html_parser
+# json encoder/decoder for going through the incidents list
+import json
+
+# This is probably obsolete now
+# import html_parser
 
 import configparser
 
@@ -54,6 +60,7 @@ import rocket_listener
 
 use_irc = False
 use_rocket = False
+json_data_source = ''
 
 # Load the configuration file
 config = configparser.ConfigParser()
@@ -79,6 +86,8 @@ if config["General"]["use_irc"] == "True":
 interval = int(config["General"]["interval"])
 if interval == 0:
 	interval = 60
+
+json_data_source = config["General"]["json_data_source"]
 
 # ---------------------------------- Start IRC ------------------------------------------
 
@@ -246,13 +255,24 @@ class Scraper(threading.Thread):
 
 	def run(self):
 		while not self.stopped.wait(interval):
+			try:
+				f = open('reviewers.txt')
+				print("Loading reviewer login names ...")
+				reviewer_names = ast.literal_eval(f.read())
+				f.close()
+			except FileNotFoundError:
+				print("Reviewer login names file not found.")
+
+			print("Polling JSON database ...")
+
 			# for ssl connections to external websites
 			# we trust our own website to be genuine, so set CERT_NONE
 			pool_manager = urllib3.PoolManager(cert_reqs='CERT_NONE', ca_certs=certifi.where())
 			# don't complain in the logs about insecure requests, please
 			urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-			request = pool_manager.request("GET", "https://maintenance.suse.de/overview/testing.html")
+			# Get JSON data from the server
+			request = pool_manager.request("GET", json_data_source)
 
 			# parse website only if it was loaded correctly
 			if request.status == 200:
@@ -261,20 +281,62 @@ class Scraper(threading.Thread):
 
 				print("Checking incidents ...")
 
-				parser = html_parser.htmlParser()
-				parser.feed(data)
+				incident_list = {}
+
+				incidents=json.loads(data)
+
+				for incident in incidents["data"]:
+					incident_sm_name = str(incident["incident"]["incident_id"]) + ":" + str(incident["request_id"])
+
+					for review in incident["unfinished_reviews"]:
+
+						if incident_sm_name not in incident_list:
+
+							assigned_user = None
+
+							if review["assigned_by_user"]:
+								assigned_user=review["assigned_by_user"]["username"]
+
+							elif review["assigned_by_group"]:
+								assigned_user=review["assigned_by_group"]["name"]
+
+							if assigned_user in reviewer_names:
+								print(incident_sm_name+" "+assigned_user)
+								incident_list[incident_sm_name] = assigned_user
+						# else:
+						# 	print (incident_sm_name+" unassigned and not for qam-sle group")
 
 				new_incidents = []
 				assigned_incidents = []
-				for incident in parser.incident_list:
-					if not incident in known_incidents:
-						if parser.incident_list[incident].find('[qam-sle]') != -1:
-							new_incidents.append(repr(incident))
-							known_incidents[incident] = '[qam-sle]'
-					elif known_incidents[incident] == '[qam-sle]':
-						if parser.incident_list[incident].find('[qam-sle]') == -1:
-							known_incidents[incident] = parser.incident_list[incident]
-							assigned_incidents.append(repr(incident) + " => " + parser.incident_list[incident])
+
+				for sm_name, assignee in incident_list.items():
+
+					new_incident = False
+
+					if not sm_name in known_incidents:
+
+						new_incident = True
+						new_incidents.append(sm_name)
+
+					elif known_incidents[sm_name]["assignee"] == 'qam-sle':
+
+						new_incident = True
+						if assignee != 'qam-sle':
+							assigned_incidents.append(sm_name + " => " + assignee)
+							known_incidents[sm_name]["assignee"] = assignee
+							known_incidents[sm_name]["assign_date"] = time.time()
+
+					if new_incident:
+						known_incidents[sm_name] = {}
+						known_incidents[sm_name]["assignee"] = assignee
+						known_incidents[sm_name]["create_date"] = time.time()
+
+						# surely this can be done better
+						if assignee != 'qam-sle':
+							known_incidents[sm_name]["assign_date"] = time.time()
+							assigned_incidents.append(sm_name + " => " + assignee)
+						else:
+							known_incidents[sm_name]["assign_date"] = None
 
 				if len(new_incidents):
 					sendmsg("New incidents: " + repr(new_incidents))
@@ -282,23 +344,34 @@ class Scraper(threading.Thread):
 				if len(assigned_incidents):
 					sendmsg("Assigned incidents: " + repr(assigned_incidents))
 
+				# gather lost incidents
 				lost_incidents = []
-				for incident in known_incidents:
-					if not incident in parser.incident_list:
-						print("Lost incident: "+repr(incident))
+				for sm_name, incident in known_incidents.items():
+					if not sm_name in incident_list:
+						print("Lost incident: "+sm_name+
+							" In databasse for "+
+								str(datetime.timedelta(seconds=time.time()-known_incidents[sm_name]["create_date"]))+
+							" - Assigned for "+
+								str(datetime.timedelta(seconds=time.time()-known_incidents[sm_name]["assign_date"]))
+						)
 
 						# remember this incident was lost
-						lost_incidents.append(incident)
+						lost_incidents.append(sm_name)
 
+				# remove lost incidents from known incidents
 				if len(lost_incidents):
-					# remove the incidents from known incidents
 					sendmsg("Lost incidents: "+repr(lost_incidents))
-					for i in lost_incidents:
-						del known_incidents[i]
+					for sm_name in lost_incidents:
+						del known_incidents[sm_name]
+
+				print("Writing known incidents ...")
 
 				f = open("incidents.txt", "w")
 				f.write(repr(known_incidents))
 				f.close()
+
+				print("Writing known incidents done")
+
 			else:
 				print("Loading website failed: " + str(request.status))
 
