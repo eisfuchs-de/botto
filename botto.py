@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-# Copyright 2019 Dario Abatianni
+# Copyright 2020 Dario Abatianni
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -276,7 +276,7 @@ class Scraper(threading.Thread):
 
 			# parse website only if it was loaded correctly
 			if request.status == 200:
-				# print(request.headers["Content-Type"]) # Content type.
+				# print(request.headers["Content-Type"]) # debug Content type.
 				data = request.data.decode("utf-8") # Response text.
 
 				print("Checking incidents ...")
@@ -295,13 +295,13 @@ class Scraper(threading.Thread):
 							assigned_user = None
 
 							if review["assigned_by_user"]:
-								assigned_user=review["assigned_by_user"]["username"]
+								assigned_user=review["assigned_by_user"]["username"].lower()
 
 							elif review["assigned_by_group"]:
-								assigned_user=review["assigned_by_group"]["name"]
+								assigned_user=review["assigned_by_group"]["name"].lower()
 
 							if assigned_user in reviewer_names:
-								print(incident_sm_name+" "+assigned_user)
+								# print(incident_sm_name+" "+assigned_user) # debug
 								incident_list[incident_sm_name] = assigned_user
 						# else:
 						# 	print (incident_sm_name+" unassigned and not for qam-sle group")
@@ -311,32 +311,35 @@ class Scraper(threading.Thread):
 
 				for sm_name, assignee in incident_list.items():
 
-					new_incident = False
-
+					# incident not yet known to the bot
 					if not sm_name in known_incidents:
 
-						new_incident = True
+						# remember this incident as new
 						new_incidents.append(sm_name)
 
-					elif known_incidents[sm_name]["assignee"] == 'qam-sle':
-
-						new_incident = True
-						if assignee != 'qam-sle':
-							assigned_incidents.append(sm_name + " => " + assignee)
-							known_incidents[sm_name]["assignee"] = assignee
-							known_incidents[sm_name]["assign_date"] = time.time()
-
-					if new_incident:
+						# add incident to our database
 						known_incidents[sm_name] = {}
+
+						# fill in the blanks
 						known_incidents[sm_name]["assignee"] = assignee
 						known_incidents[sm_name]["create_date"] = time.time()
 
-						# surely this can be done better
+						# None gives us errors when calculating "Assigned for" time, so use 0 for now
+						known_incidents[sm_name]["assign_date"] = 0
+
+						# group assignments don't get an assigned date
 						if assignee != 'qam-sle':
 							known_incidents[sm_name]["assign_date"] = time.time()
+
+					# incident already known to the bot and assigned to the group
+					elif known_incidents[sm_name]["assignee"] == 'qam-sle':
+
+						# assignee changed to a user
+						if assignee != 'qam-sle':
+							# add assign date and change assignee
 							assigned_incidents.append(sm_name + " => " + assignee)
-						else:
-							known_incidents[sm_name]["assign_date"] = None
+							known_incidents[sm_name]["assignee"] = assignee
+							known_incidents[sm_name]["assign_date"] = time.time()
 
 				if len(new_incidents):
 					sendmsg("New incidents: " + repr(new_incidents))
@@ -348,8 +351,9 @@ class Scraper(threading.Thread):
 				lost_incidents = []
 				for sm_name, incident in known_incidents.items():
 					if not sm_name in incident_list:
-						print("Lost incident: "+sm_name+
-							" In databasse for "+
+						sendmsg("Lost incident: "+sm_name+
+							" - Assigned to "+known_incidents[sm_name]["assignee"]+
+							" - In databasse for "+
 								str(datetime.timedelta(seconds=time.time()-known_incidents[sm_name]["create_date"]))+
 							" - Assigned for "+
 								str(datetime.timedelta(seconds=time.time()-known_incidents[sm_name]["assign_date"]))
@@ -360,7 +364,7 @@ class Scraper(threading.Thread):
 
 				# remove lost incidents from known incidents
 				if len(lost_incidents):
-					sendmsg("Lost incidents: "+repr(lost_incidents))
+					print("Lost incidents: "+repr(lost_incidents))
 					for sm_name in lost_incidents:
 						del known_incidents[sm_name]
 
